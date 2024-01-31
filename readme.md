@@ -2,7 +2,7 @@
 
 You should read this whole page before attacking the problem, including the part about Docker and your working copy.
 
-The exercise is divided into 4 parts that you should take in order. The 4 parts of the exercise are disclosed bit by bit, and here is the 1st part. The 4 parts are for the same project, this project.
+The exercise is divided into 4 parts that you should take in order. The 4 parts of the exercise were disclosed bit by bit, and here are all 4 parts parts. The 4 parts are for the same project, this project.
 
 This is the beginning of a larger project dedicated to the future payments of [toll roads](https://en.wikipedia.org/wiki/Toll_road). The project, built with Ignite 0.22.1 and CosmJS 0.28.13, is far from complete.
 
@@ -14,7 +14,15 @@ However it already contains:
     $ ignite scaffold single SystemInfo nextOperatorId:uint --no-message
     ```
 
-2. More actions to be disclosed in subsequent parts.
+2. A map of `RoadOperator`s. It was created with:
+
+    ```sh
+    $ ignite scaffold map RoadOperator name token active:bool
+    ```
+
+    The default behavior of the scaffolding command is to have the index of the operator come from `MsgCreateRoadOperator`. However, `index` was removed from `MsgCreateRoadOperator`. That's because when a user creates a new road operator, the user does not choose the ID. Instead, it is chosen by the system on creation. After rebuild, various compilation errors were "fixed" in a lazy way.
+
+3. The third-party Protobuf files necessary to compile to Typescript. And the Protobuf compiler executable. Some incopmlete CosmJS Typescript files.
 
 ## Do now
 
@@ -36,7 +44,9 @@ This is not to save you time. Instead this is to save you mistakes and surprises
 The following steps are in order of increasing difficulty:
 
 1. Adjustments on system info.
-2. More actions to be disclosed in subsequent parts.
+2. Adjustments on road operators.
+3. Add a new store type: User vaults.
+4. Compile the Protobuf files to Typescript and complete the missing parts in the incomplete CosmJS files.
 
 The tests have been divided into different packages to avoid compilation errors while your project is incomplete.
 
@@ -48,9 +58,179 @@ Adjust `x/tollroad/types/genesis.go` so that the `x/tollroad/genesis_test.go` te
 $ go test github.com/b9lab/toll-road/x/tollroad
 ```
 
-### On subsequent parts
+### On road operators
 
-They will be disclosed at some point.
+When a road operator is created, its ID has to be taken from `SystemInfo`. For this part, you are going to work only in `x/tollroad/keeper/msg_server_road_operator.go` and in it, only adjust the `CreateRoadOperator` function body. **Not the function signature, not another function, not another file.**
+
+This is what you have to implement:
+
+1. Make sure that the new road operator has its ID taken from `SystemInfo`.
+2. Have this ID returned by the message server function.
+3. Make sure the next id in `SystemInfo` is incremented.
+4. Emit an event with the expected type and attributes.
+
+To confirm, run:
+
+```sh
+$ go test github.com/b9lab/toll-road/x/tollroad/roadoperatorstudent
+```
+
+Look into the `x/tollroad/roadoperatorstudent/msg_server_road_operator_test.go` file to see what is expected, in particular the details of the expected event.
+
+### On user vaults
+
+This part requires more work.
+
+With the operators in place, it is time to move your attention to the users of the road operators. Users are going to keep some tokens in escrow with the operators. The idea is that road operators will eventually be allowed to transfer to themselves some of the tokens that the users have put into escrow "with them".
+
+To keep track of **which user** has put **how much** of **which token denomination** in escrow with **which operator**, you have to add a new type named `UserVault`.
+
+The user vault object has exactly 4 fields, not less, not more. In Protobuf it should be:
+
+```protobuf
+message UserVault {
+    string owner = 1; 
+    string roadOperatorIndex = 2; 
+    string token = 3; 
+    uint64 balance = 4; 
+}
+```
+
+The user vault object's key in the map is the combination of, and in this order, `owner, roadOperatorIndex, token`. This means, for instance, that the future keeper function to get a user vault has this signature:
+
+```go
+func (k Keeper) GetUserVault(ctx sdk.Context, owner string, roadOperatorIndex string, token string) (val types.UserVault, found bool)
+```
+
+In effect, `balance` is the only field that is not part of the object's key.
+
+Additionally, the message to create this vault object should not have the `owner` field, as it is in effect picked from the `creator` field. In Protobuf, the create message is exactly:
+
+```protobuf
+message MsgCreateUserVault {
+    string creator = 1;
+    string roadOperatorIndex = 2;
+    string token = 3;
+    uint64 balance = 4;
+}
+```
+
+It should not be allowed to create another user vault with the same key of `owner, roadOperatorIndex, token`.
+
+Similarly, the message to update the vault picks the owner in the `creator` field. In Protobuf, it looks like `MsgCreateUserVault`:
+
+```protobuf
+message MsgUpdateUserVault {
+    string creator = 1;
+    string roadOperatorIndex = 2;
+    string token = 3;
+    uint64 balance = 4;
+}
+```
+
+`balance` is the only field that can be updated.
+
+And again, the message to delete a vault:
+
+```protobuf
+message MsgDeleteUserVault {
+    string creator = 1;
+    string roadOperatorIndex = 2;
+    string token = 3;
+}
+```
+
+With these objectives in mind, your tasks are as follows.
+
+#### Scaffold the type
+
+So your first task is to add a new mapped type named `UserVault` with `ignite scaffold map`. If you do it right, you can:
+
+1. Use a single Ignite command.
+2. Do minor adjustments on Protobuf objects to match as per the above.
+3. Fix compilation errors that appear after successive rebuilds.
+4. Adjust the functions in `x/tollroad/client/cli/tx_user_vault.go` as per the change in how things need to be called, i.e. replacing `owner` with creator.
+
+#### Handle tokens
+
+With the data structure, the keeper and the messages stuff done, your second task is to handle the tokens by calling the bank.
+
+We have prepared mocks in `testutil/mock_types/expected_keepers.go`. The `MockBankEscrowKeeper` is a mock of a yet-to-be-created `type BankEscrowKeeper interface`. You have to:
+
+1. In `x/tollroad/types/expected_keepers.go`, declare this interface.
+2. Have it declare the two bank functions that transfer tokens between module and accounts.
+
+With this done, apply what you learned in the course so that:
+
+1. Your keeper has the permissions and the capability to transfer tokens between users and its module.
+2. You use the mock `MockBankEscrowKeeper` in the **test** keeper initialization. To find out where this takes place, follow through the set up of tests.
+3. Your keeper has to be able to actually transfer tokens between the user and the module:
+    1. On creating the vault:
+        1. The `balance` amount is transferred from the user to the module.
+        2. If the user does not have enough tokens, then it should return an error. See the tests for the details of messages.
+        3. If the amount is `0` then it returns an error.
+    2. On deleting the vault:
+        1. The `balance` amount is transferred from the module to the user.
+        1. If the module does not have enough tokens, it should panic. See the tests for the details of messages.
+    3. On updating the vault:
+        1. If the balance field in the message is higher than the current vault balance, the difference is transferred from the user to the module. And should return an error if it is not possible.
+        2. If the balance field in the message is lower than the current vault balance, the difference is transferred from the module to the user. And should panic if it is not possible.
+        3. If the balance field in the message is `0` then it returns an error, because conceptually, this should be a deletion.
+4. If your keeper function receives an error when calling the bank, it should return this error unmodified, like so:
+
+    ```go
+    err = k.bank.SendCoins...
+    if err != nil {
+        return nil, err
+    }
+    ```
+
+    This is just to make sure that you pass the tests.
+
+#### Checking it all
+
+To confirm, run:
+
+```sh
+$ go test github.com/b9lab/toll-road/x/tollroad/uservaultstudent
+```
+
+The tests are in two files:
+
+1. `x/tollroad/uservaultstudent/msg_server_user_vault_test.go` that runs unit tests with mocks. The mocks confirm that the bank was called as expected.
+2. `x/tollroad/uservaultstudent/tx_user_vault_test.go` that starts a full app. The tests also confirm that the toll-road module has the expected balance.
+
+Check in these files to see the details of what is expected.
+
+### On CosmJS
+
+Start by compiling the Protobuf files into Typescript.
+
+* The necessary third party files are already there. For instance [`proto/google/api/annotations.proto`](proto/google/api/annotations.proto).
+* The [`protoc`](Dockerfile-exam#L41) executable is in your Docker image. It works if you are on an Intel 64 bits or Apple M1 platform. In particular, if you are using another platform, you will have to adjust `Dockerfile-exam` or download `protoc` for [your local environment](https://github.com/protocolbuffers/protobuf/releases/tag/v21.7). After you have built the image, confirm that it works with:
+
+```sh
+$ docker run --rm -it exam_i protoc
+```
+
+To confirm that you generated the correct Typescript files, confirm there are no compilation errors in [`queries.ts`](client/src/modules/tollroad/queries.ts).
+
+With the objects created, you can move to the task of filling in the missing parts in the following files:
+
+* [`client/src/types/tollroad/events.ts`](client/src/types/tollroad/events.ts) has functions that throw `"Not implemented"`.
+* [`client/src/modules/tollroad/queries.ts`](client/src/modules/tollroad/queries.ts) has a function that throws `"Not implemented"`.
+* [`client/src/types/tollroad/messages.ts`](client/src/types/tollroad/messages.ts) has missing message objects.
+* [`client/src/tollroad_signingstargateclient.ts`](client/src/tollroad_signingstargateclient.ts) has functions that throw `"Not implemented"`.
+
+At the core, the tests are regular NPM tests: [`client/test/integration/one-run.ts`](client/test/integration/one-run.ts). However, as you can see from the many `before` clauses, it calls the Ignite faucet to populate the test accounts. So you cannot just run `npm test` as usual.
+
+You need to run [`testing-cosmjs.sh`](testing-cosmjs.sh):
+
+```sh
+$ ./testing-cosmjs.sh
+```
+
+It starts an `ignite chain serve` before `npm test`, and stops it afterwards.
 
 ## Preparing your working copy
 
@@ -80,11 +260,9 @@ To prepare your working copy:
 
 3. You can keep `push`ing as many further commits as you want before the deadline.
 
-### Subsequent parts
+### Subsequent part
 
-When new parts are disclosed, you will see a [merge request](../../merge_requests) from the upstream repository towards your personal repository. When you are ready to work on the next parts, you can simply merge the MR. There should not be any conflict if you did not modify files mentioned in `fileconfig.yml`.
-
-Note that even after accepting a merge request, you can still work on the previous parts of the exercise. It is only a disclosure mechanism, it does not freeze previous scores in any way.
+There are no subsequent parts.
 
 ### Deadline
 
@@ -100,7 +278,8 @@ For your convenience, here are the `go test` commands that the grading scripts w
 
 ```sh
 $ go test github.com/b9lab/toll-road/x/tollroad
-# More tests to be disclosed in subsequent parts
+$ go test github.com/b9lab/toll-road/x/tollroad/roadoperatorstudent
+$ go test github.com/b9lab/toll-road/x/tollroad/uservaultstudent
 ```
 
 Each of them is actually launched from a script, respectively:
@@ -109,10 +288,11 @@ Each of them is actually launched from a script, respectively:
 $ ./x/tollroad/testing.sh
 $ ./x/tollroad/roadoperatorstudent/testing.sh
 $ ./x/tollroad/uservaultstudent/testing.sh
-$ ./testing-cosmjs.sh
 ```
 
 Inside each of them (after disclosure) you can see how much weight is given to each test.
+
+The NPM tests are launched from `./testing-cosmjs.sh` and each of the 4 tests has the same weight.
 
 In turn, these 4 `testing` scripts are launched from this script:
 
