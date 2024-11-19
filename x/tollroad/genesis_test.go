@@ -25,7 +25,15 @@ func TestGenesis(t *testing.T) {
 				Index: "1",
 			},
 		},
-		// this line is used by starport scaffolding # genesis/test/state
+		UserVaultList: []types.UserVault{
+		{
+			Index: "0",
+},
+		{
+			Index: "1",
+},
+	},
+	// this line is used by starport scaffolding # genesis/test/state
 	}
 
 	k, ctx := keepertest.TollroadKeeper(t)
@@ -38,5 +46,6 @@ func TestGenesis(t *testing.T) {
 
 	require.Equal(t, genesisState.SystemInfo, got.SystemInfo)
 	require.ElementsMatch(t, genesisState.RoadOperatorList, got.RoadOperatorList)
-	// this line is used by starport scaffolding # genesis/test/assert
+	require.ElementsMatch(t, genesisState.UserVaultList, got.UserVaultList)
+// this line is used by starport scaffolding # genesis/test/assert
 }
